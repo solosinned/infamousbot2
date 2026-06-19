@@ -13,9 +13,15 @@ A local Python economy userbot scaffold for https://inf44121.eleganthotel.my/.
 ## Usage
 
 1. Install Python 3.12+.
-2. Run `python3 bot.py`.
+2. Run `python3 bot.py` for the local terminal economy bot.
 3. Use `login <name>` to create or switch local users.
 4. Enter `s.help` for available commands.
+
+## Website userbot
+
+- Run `python3 web_userbot.py` to launch the website userbot.
+- It will attempt to sign in automatically using the account in `config.py` and monitor the chat area for commands beginning with `s.`.
+- It sends responses back into the website chat.
 
 ## Notes
 

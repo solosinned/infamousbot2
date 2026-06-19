@@ -102,6 +102,7 @@ class WebsiteUserbot:
             raise RuntimeError("Could not locate the chat input field on the page.")
         if not self.chat_area_selector:
             raise RuntimeError("Could not locate the chat message area on the page.")
+        self._send_chat_message("blah")
         print("Logged in and found chat area. Listening for commands...")
         self._listen_loop()
 
