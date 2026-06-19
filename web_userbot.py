@@ -25,6 +25,24 @@ CHAT_INPUT_CANDIDATES = [
     'div[class*="message"]',
 ]
 
+LOGIN_SUCCESS_TEXT = [
+    'logout',
+    'sign out',
+    'profile',
+    'account',
+    'settings',
+    'my account',
+    'dark mode',
+]
+
+LOGIN_FAILURE_TEXT = [
+    'login',
+    'sign in',
+    'register',
+    'create account',
+    'forgot password',
+]
+
 CAPTCHA_SELECTORS = [
     "iframe[src*='anubis']",
     "iframe[src*='captcha']",
@@ -180,15 +198,38 @@ class WebsiteUserbot:
             print("Warning: login may not have completed. The site may require additional interaction.")
             print(f"Login check failed. Current URL: {self.page.url}")
             print(f"Current page title: {self.page.title()}")
+            self._save_debug_snapshot('login-failure')
 
     def _is_logged_in(self) -> bool:
         try:
             self.page.wait_for_selector('input[type="password"]', state='detached', timeout=8000)
         except TimeoutError:
             pass
-        logged_in = bool(self._find_chat_input())
-        print(f"Login check: chat input {'found' if logged_in else 'not found'}.")
+        chat_input_found = bool(self._find_chat_input())
+        logged_in_ui = self._find_logged_in_ui()
+        login_form_present = self._find_login_ui()
+        logged_in = bool(logged_in_ui or (chat_input_found and not login_form_present))
+        print(
+            f"Login check: chat input {'found' if chat_input_found else 'not found'}, "
+            f"login form {'present' if login_form_present else 'absent'}, "
+            f"success indicator {'found' if logged_in_ui else 'not found'}, "
+            f"inferred {'logged in' if logged_in else 'not logged in'}."
+        )
         return logged_in
+
+    def _find_logged_in_ui(self) -> bool:
+        body_text = self._get_body_text()
+        return any(token in body_text for token in LOGIN_SUCCESS_TEXT)
+
+    def _find_login_ui(self) -> bool:
+        body_text = self._get_body_text()
+        return any(token in body_text for token in LOGIN_FAILURE_TEXT)
+
+    def _get_body_text(self) -> str:
+        try:
+            return self.page.inner_text('body').lower()
+        except Exception:
+            return ''
 
     def _find_login_field(self, hints: List[str], fields: tuple) -> Optional[Page]:
         for field in fields:
@@ -415,6 +456,8 @@ class WebsiteUserbot:
                 lines.extend(body_lines)
             except Exception as exc:
                 print(f"Fallback body scan failed: {exc}")
+        if not lines:
+            self._save_debug_snapshot('no-chat-lines')
         return lines
 
     def _scan_message_elements(self) -> List[str]:
@@ -516,6 +559,18 @@ class WebsiteUserbot:
             self.page.keyboard.press("Enter")
         except Exception as exc:
             print(f"Fallback send failed: {exc}")
+            self._save_debug_snapshot('send-failure')
+
+    def _save_debug_snapshot(self, label: str) -> None:
+        try:
+            timestamp = int(time.time())
+            prefix = f"/tmp/web_userbot_{label}_{timestamp}"
+            self.page.screenshot(path=f"{prefix}.png", full_page=True)
+            with open(f"{prefix}.html", "w", encoding="utf-8") as handle:
+                handle.write(self.page.content())
+            print(f"Saved debug snapshot: {prefix}.png and {prefix}.html")
+        except Exception as exc:
+            print(f"Failed to save debug snapshot {label}: {exc}")
 
 
 if __name__ == "__main__":
