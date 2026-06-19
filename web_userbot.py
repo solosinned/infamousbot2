@@ -51,6 +51,23 @@ CHAT_AREA_CANDIDATES = [
     '.message-list',
 ]
 
+CHAT_MESSAGE_CANDIDATES = [
+    '.message',
+    '.chat-message',
+    '.chat-line',
+    '.message-row',
+    '.message-body',
+    '.message-text',
+    '.bubble',
+    '.chat-entry',
+    '.room-chat-message',
+    '.chat-message__content',
+    '.message__content',
+    '.chat-item',
+    '.msg',
+    '.chat-msg',
+]
+
 LOGIN_BUTTON_TEXT = [
     'Log In',
     'Login',
@@ -352,14 +369,7 @@ class WebsiteUserbot:
                 time.sleep(5)
 
     def _collect_new_commands(self) -> List[str]:
-        if not self.chat_area_selector:
-            return []
-        try:
-            raw_text = self.page.inner_text(self.chat_area_selector)
-        except Exception as exc:
-            print(f"Error reading chat area text: {exc}")
-            return []
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        lines = self._collect_chat_lines()
         new_commands: List[str] = []
         for line in lines:
             if line in self.last_seen_lines:
@@ -373,6 +383,36 @@ class WebsiteUserbot:
         if new_commands:
             print(f"Detected new chat commands: {new_commands}")
         return new_commands
+
+    def _collect_chat_lines(self) -> List[str]:
+        lines: List[str] = []
+        if self.chat_area_selector:
+            try:
+                raw_text = self.page.inner_text(self.chat_area_selector)
+                lines.extend([line.strip() for line in raw_text.splitlines() if line.strip()])
+            except Exception as exc:
+                print(f"Error reading chat area text: {exc}")
+        if not lines:
+            lines = self._scan_message_elements()
+        return lines
+
+    def _scan_message_elements(self) -> List[str]:
+        lines: List[str] = []
+        for selector in CHAT_MESSAGE_CANDIDATES:
+            try:
+                elements = self.page.query_selector_all(selector)
+            except Exception:
+                continue
+            for element in elements:
+                try:
+                    text = element.inner_text().strip()
+                except Exception:
+                    continue
+                if text:
+                    lines.append(text)
+        if lines:
+            print(f"Scanned {len(lines)} candidate chat lines from message selectors.")
+        return lines
 
     def _extract_commands_from_line(self, line: str) -> List[str]:
         content = line
