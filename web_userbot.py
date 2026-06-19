@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import re
 import time
 from typing import List, Optional
@@ -76,11 +77,12 @@ class WebsiteUserbot:
             return SITE_EMAIL.split("@", 1)[0]
         return SITE_EMAIL
 
-    def launch(self, headless: bool = True) -> None:
+    def launch(self, headless: bool = False) -> None:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=headless)
-            context = browser.new_context()
+            context = browser.new_context(ignore_https_errors=True)
             page = context.new_page()
+            page.set_default_timeout(120000)
             self.page = page
             try:
                 self.run()
@@ -90,11 +92,10 @@ class WebsiteUserbot:
 
     def run(self) -> None:
         print(f"Starting website userbot for {self.local_user}...")
-        self.page.goto(HOTEL_URL, timeout=60000)
-        self.page.wait_for_load_state("networkidle", timeout=30000)
+        self._open_site()
         self._dismiss_initial_overlay()
         self._login_if_needed()
-        self.page.wait_for_load_state("networkidle", timeout=30000)
+        self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
         self.chat_input_selector = self._find_chat_input()
         self.chat_area_selector = self._find_chat_area()
@@ -102,7 +103,10 @@ class WebsiteUserbot:
             raise RuntimeError("Could not locate the chat input field on the page.")
         if not self.chat_area_selector:
             raise RuntimeError("Could not locate the chat message area on the page.")
+        print(f"Found chat input: {self.chat_input_selector}")
+        print(f"Found chat area: {self.chat_area_selector}")
         self._send_chat_message("blah")
+        print("Sent initial chat message 'blah'.")
         print("Logged in and found chat area. Listening for commands...")
         self._listen_loop()
 
@@ -110,19 +114,24 @@ class WebsiteUserbot:
         if self._is_logged_in():
             print("Already logged in.")
             return
+        print("Login required, looking for login dialog...")
         self._open_login_dialog()
         email_field = self._find_login_field(["email", "login", "user"], fields=("input",))
         password_field = self._find_login_field(["password", "pass"], fields=("input",))
         if not email_field or not password_field:
+            print("Login fields were not found. Dumping candidate inputs...")
+            self._dump_input_fields()
             raise RuntimeError("Unable to find login form fields. Please verify the website login page structure.")
+        print("Filling login credentials...")
         email_field.fill(SITE_EMAIL)
         password_field.fill(SITE_PASSWORD)
         button = self._find_login_button()
         if button:
+            print("Clicking login button...")
             button.click()
         else:
             password_field.press("Enter")
-        self.page.wait_for_load_state("networkidle", timeout=30000)
+        self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
         if not self._is_logged_in():
             print("Warning: login may not have completed. The site may require additional interaction.")
@@ -168,11 +177,24 @@ class WebsiteUserbot:
             return buttons[0]
         return None
 
+    def _open_site(self) -> None:
+        print(f"Opening site: {HOTEL_URL}")
+        try:
+            self.page.goto(HOTEL_URL, timeout=120000, wait_until='domcontentloaded')
+        except TimeoutError:
+            print("Warning: page.goto timed out waiting for DOM content. Continuing with current page state.")
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=120000)
+        except TimeoutError:
+            print("Warning: page did not reach networkidle. Continuing with current page state.")
+        print(f"Page opened, current URL: {self.page.url}")
+
     def _open_login_dialog(self) -> None:
         for text in LOGIN_BUTTON_TEXT:
             start_button = self.page.query_selector(f"button:has-text(\"{text}\")")
             if start_button and start_button.is_visible():
                 try:
+                    print(f"Clicking login trigger button with text '{text}'")
                     start_button.click()
                     time.sleep(0.5)
                     return
@@ -181,11 +203,13 @@ class WebsiteUserbot:
             link = self.page.query_selector(f"a:has-text(\"{text}\")")
             if link and link.is_visible():
                 try:
+                    print(f"Clicking login trigger link with text '{text}'")
                     link.click()
                     time.sleep(0.5)
                     return
                 except Exception:
                     pass
+        print("No login trigger button/link found; assuming login fields are already visible.")
 
     def _dismiss_initial_overlay(self) -> None:
         for selector in OVERLAY_DISMISS_SELECTORS:
@@ -211,7 +235,11 @@ class WebsiteUserbot:
         for selector in CHAT_INPUT_CANDIDATES:
             element = self.page.query_selector(selector)
             if element:
+                print(f"Detected chat input selector: {selector}")
                 return selector
+        if self.page.query_selector('div[contenteditable="true"]'):
+            print("Detected contenteditable chat input")
+            return 'div[contenteditable="true"]'
         return None
 
     def _find_chat_area(self) -> Optional[str]:
@@ -220,15 +248,19 @@ class WebsiteUserbot:
             '.chatbox',
             '.chat-content',
             '.message-list',
-            '.messages-list',
+            '.chat-window',
+            '.chatlog',
             'div[aria-live="polite"]',
             'div[role="log"]',
         ]
         for selector in expanded_candidates:
             element = self.page.query_selector(selector)
             if element:
+                print(f"Detected chat area selector: {selector}")
                 return selector
         page_text = self.page.content().lower()
+        if "chat" in page_text or "message" in page_text:
+            print("Falling back to body as chat area selector")
         if "chat" in page_text or "message" in page_text:
             return "body"
         return None
@@ -307,26 +339,36 @@ class WebsiteUserbot:
         input_field = self.page.query_selector(self.chat_input_selector)
         if not input_field:
             raise RuntimeError("Unable to locate the chat input element.")
+        print(f"Sending chat message using selector {self.chat_input_selector}: {message}")
         element_type = input_field.get_attribute("contenteditable")
         if element_type == "true":
             input_field.click()
             self.page.keyboard.type(message)
             self.page.keyboard.press("Enter")
             return
-        input_field.fill(message)
         try:
+            input_field.fill(message)
             input_field.press("Enter")
-        except Exception:
-            send_button = self.page.query_selector("button:has-text(\"Send\"), button:has-text(\"send\"), button[aria-label*='Send']")
-            if send_button:
-                send_button.click()
-            else:
-                self.page.keyboard.press("Enter")
+            return
+        except Exception as exc:
+            print(f"Primary send method failed: {exc}")
+        send_button = self.page.query_selector("button:has-text(\"Send\"), button:has-text(\"send\"), button[aria-label*='Send']")
+        if send_button:
+            send_button.click()
+            return
+        try:
+            self.page.keyboard.press("Enter")
+        except Exception as exc:
+            print(f"Fallback send failed: {exc}")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the InfamousBot2 website userbot.")
+    parser.add_argument("--headless", action="store_true", help="Run the browser in headless mode.")
+    args = parser.parse_args()
+
     bot = WebsiteUserbot()
     try:
-        bot.launch(headless=True)
+        bot.launch(headless=args.headless)
     except Exception as error:
         print(f"Website userbot could not run: {error}")
