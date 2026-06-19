@@ -310,8 +310,8 @@ class WebsiteUserbot:
                 continue
         try:
             body_text = self.page.inner_text("body").lower()
-            if "anubis" in body_text or "captcha" in body_text or "i'm not a robot" in body_text:
-                print("Detected captcha-like page content.")
+            if "anubis" in body_text or "i'm not a robot" in body_text:
+                print("Detected captcha-like page content in body text.")
                 return True
         except Exception:
             pass
