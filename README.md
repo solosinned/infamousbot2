@@ -19,11 +19,30 @@ A local Python economy userbot scaffold for https://inf44121.eleganthotel.my/.
 
 ## Website userbot
 
-- Run `python3 web_userbot.py` to launch the website userbot.
-- It will attempt to sign in automatically using the account in `config.py` and monitor the chat area for commands beginning with `s.`.
-- It sends responses back into the website chat.
+- Install dependencies (recommended in a virtualenv):
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m playwright install
+```
+
+- Configure credentials and target site using environment variables (do not commit these):
+
+```bash
+export HOTEL_URL="https://infamous-tutoring.space/"
+export SITE_EMAIL="your@email"
+export SITE_PASSWORD="yourpassword"
+```
+
+- Run the userbot (optionally headless):
+
+```bash
+python3 web_userbot.py --headless
+```
+
+- The userbot will sign in with the provided credentials and monitor the page chat for commands prefixed with `s.`. Responses are sent back into the website chat.
 
 ## Notes
 
-- The provided account info is stored in `config.py` for future automation.
-- This current version does not automate the website directly; it is a local command-based economy bot.
+- Store credentials in environment variables or a secrets manager; do not commit them into the repository.
+- The website userbot uses Playwright to control a browser and may require extra interaction if the site uses CAPTCHA or multi-step authentication.
