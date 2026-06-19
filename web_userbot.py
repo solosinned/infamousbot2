@@ -25,6 +25,21 @@ CHAT_INPUT_CANDIDATES = [
     'div[class*="message"]',
 ]
 
+CAPTCHA_SELECTORS = [
+    "iframe[src*='anubis']",
+    "iframe[src*='captcha']",
+    "iframe[src*='hcaptcha']",
+    "iframe[src*='recaptcha']",
+    "div[class*='anubis']",
+    "div[id*='anubis']",
+    "div[class*='h-captcha']",
+    "div[class*='g-recaptcha']",
+    "div[id*='h-captcha']",
+    "div[id*='g-recaptcha']",
+]
+
+CAPTCHA_WAIT_SECONDS = 180
+
 CHAT_AREA_CANDIDATES = [
     '.chat-log',
     '.chat-messages',
@@ -94,9 +109,11 @@ class WebsiteUserbot:
         print(f"Starting website userbot for {self.local_user}...")
         self._open_site()
         self._dismiss_initial_overlay()
+        self._wait_for_captcha_clear()
         self._login_if_needed()
         self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
+        self._wait_for_captcha_clear()
         self.chat_input_selector = self._find_chat_input()
         self.chat_area_selector = self._find_chat_area()
         if not self.chat_input_selector:
@@ -116,6 +133,7 @@ class WebsiteUserbot:
             return
         print("Login required, looking for login dialog...")
         self._open_login_dialog()
+        self._wait_for_captcha_clear()
         email_field = self._find_login_field(["email", "login", "user"], fields=("input",))
         password_field = self._find_login_field(["password", "pass"], fields=("input",))
         if not email_field or not password_field:
@@ -133,6 +151,7 @@ class WebsiteUserbot:
             password_field.press("Enter")
         self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
+        self._wait_for_captcha_clear()
         if not self._is_logged_in():
             print("Warning: login may not have completed. The site may require additional interaction.")
 
@@ -211,6 +230,57 @@ class WebsiteUserbot:
                     pass
         print("No login trigger button/link found; assuming login fields are already visible.")
 
+    def _detect_captcha(self) -> bool:
+        for selector in CAPTCHA_SELECTORS:
+            try:
+                element = self.page.query_selector(selector)
+                if element and element.is_visible():
+                    print(f"Detected captcha-like element using selector: {selector}")
+                    return True
+            except Exception:
+                continue
+        try:
+            body_text = self.page.inner_text("body").lower()
+            if "anubis" in body_text or "captcha" in body_text or "i'm not a robot" in body_text:
+                print("Detected captcha-like page content.")
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _wait_for_captcha_clear(self) -> None:
+        if not self._detect_captcha():
+            return
+        print("CAPTCHA detected. Waiting for manual solve or page clearance...")
+        deadline = time.time() + CAPTCHA_WAIT_SECONDS
+        while time.time() < deadline:
+            time.sleep(5)
+            if not self._detect_captcha():
+                print("CAPTCHA appears to be cleared.")
+                return
+            print("Still waiting for CAPTCHA to clear...")
+        raise RuntimeError(
+            "CAPTCHA was detected and did not clear within the wait period. "
+            "Run the bot without --headless if you need to solve it manually, or adjust the site flow."
+        )
+
+    def _dump_input_fields(self) -> None:
+        try:
+            elements = self.page.query_selector_all('input, textarea, [contenteditable]')
+            print("Dumping candidate input fields:")
+            for element in elements:
+                try:
+                    tag = element.evaluate("el => el.tagName")
+                    input_type = element.get_attribute("type") or ""
+                    name = element.get_attribute("name") or ""
+                    element_id = element.get_attribute("id") or ""
+                    placeholder = element.get_attribute("placeholder") or ""
+                    print(f"  {tag} type={input_type!r} name={name!r} id={element_id!r} placeholder={placeholder!r}")
+                except Exception:
+                    pass
+        except Exception as exc:
+            print(f"Failed to dump input fields: {exc}")
+
     def _dismiss_initial_overlay(self) -> None:
         for selector in OVERLAY_DISMISS_SELECTORS:
             try:
@@ -284,7 +354,11 @@ class WebsiteUserbot:
     def _collect_new_commands(self) -> List[str]:
         if not self.chat_area_selector:
             return []
-        raw_text = self.page.inner_text(self.chat_area_selector)
+        try:
+            raw_text = self.page.inner_text(self.chat_area_selector)
+        except Exception as exc:
+            print(f"Error reading chat area text: {exc}")
+            return []
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         new_commands: List[str] = []
         for line in lines:
@@ -293,10 +367,28 @@ class WebsiteUserbot:
             self.last_seen_lines.append(line)
             if len(self.last_seen_lines) > 400:
                 self.last_seen_lines = self.last_seen_lines[-400:]
-            content = line.split(":", 1)[-1].strip()
-            if content.lower().startswith(COMMAND_PREFIX):
-                new_commands.append(content)
+            commands = self._extract_commands_from_line(line)
+            for command in commands:
+                new_commands.append(command)
+        if new_commands:
+            print(f"Detected new chat commands: {new_commands}")
         return new_commands
+
+    def _extract_commands_from_line(self, line: str) -> List[str]:
+        content = line
+        if ":" in line:
+            content = line.split(":", 1)[-1].strip()
+        commands: List[str] = []
+        if content.lower().startswith(COMMAND_PREFIX):
+            commands.append(content)
+            return commands
+        tokens = content.split()
+        for index, token in enumerate(tokens):
+            token = token.strip(".,!?;\"'\n\r")
+            if token.lower().startswith(COMMAND_PREFIX):
+                commands.append(" ".join(tokens[index:]).strip())
+                break
+        return commands
 
     def _handle_command(self, command_text: str) -> Optional[str]:
         parts = command_text.split()
