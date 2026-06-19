@@ -122,8 +122,8 @@ class WebsiteUserbot:
             raise RuntimeError("Could not locate the chat message area on the page.")
         print(f"Found chat input: {self.chat_input_selector}")
         print(f"Found chat area: {self.chat_area_selector}")
-        self._send_chat_message("blah")
-        print("Sent initial chat message 'blah'.")
+        self._send_chat_message("bleh")
+        print("Sent initial chat message 'bleh'.")
         print("Logged in and found chat area. Listening for commands...")
         self._listen_loop()
 
