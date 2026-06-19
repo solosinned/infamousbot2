@@ -139,6 +139,7 @@ class WebsiteUserbot:
             raise RuntimeError("Could not locate the chat message area on the page.")
         print(f"Found chat input: {self.chat_input_selector}")
         print(f"Found chat area: {self.chat_area_selector}")
+        print("Sending activation ping to global chat...")
         self._send_chat_message("bleh")
         print("Sent initial chat message 'bleh'.")
         print("Logged in and found chat area. Listening for commands...")
@@ -390,10 +391,19 @@ class WebsiteUserbot:
             try:
                 raw_text = self.page.inner_text(self.chat_area_selector)
                 lines.extend([line.strip() for line in raw_text.splitlines() if line.strip()])
+                print(f"Collected {len(lines)} lines from chat area selector {self.chat_area_selector}.")
             except Exception as exc:
                 print(f"Error reading chat area text: {exc}")
         if not lines:
             lines = self._scan_message_elements()
+        if not lines:
+            try:
+                raw_text = self.page.inner_text('body')
+                body_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+                print(f"Fallback collected {len(body_lines)} lines from body.")
+                lines.extend(body_lines)
+            except Exception as exc:
+                print(f"Fallback body scan failed: {exc}")
         return lines
 
     def _scan_message_elements(self) -> List[str]:
@@ -403,6 +413,8 @@ class WebsiteUserbot:
                 elements = self.page.query_selector_all(selector)
             except Exception:
                 continue
+            if elements:
+                print(f"Found {len(elements)} elements with selector {selector}.")
             for element in elements:
                 try:
                     text = element.inner_text().strip()
@@ -431,6 +443,7 @@ class WebsiteUserbot:
         return commands
 
     def _handle_command(self, command_text: str) -> Optional[str]:
+        print(f"Handling command: {command_text}")
         parts = command_text.split()
         command = parts[0].lower()
         args = parts[1:]
