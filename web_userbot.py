@@ -127,10 +127,13 @@ class WebsiteUserbot:
         self._open_site()
         self._dismiss_initial_overlay()
         self._wait_for_captcha_clear()
+        print(f"Initial URL before login: {self.page.url}")
         self._login_if_needed()
         self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
         self._wait_for_captcha_clear()
+        print(f"Page URL after login attempt: {self.page.url}")
+        print(f"Page title after login attempt: {self.page.title()}")
         self.chat_input_selector = self._find_chat_input()
         self.chat_area_selector = self._find_chat_area()
         if not self.chat_input_selector:
@@ -150,6 +153,7 @@ class WebsiteUserbot:
             print("Already logged in.")
             return
         print("Login required, looking for login dialog...")
+        print(f"Current URL before login: {self.page.url}")
         self._open_login_dialog()
         self._wait_for_captcha_clear()
         email_field = self._find_login_field(["email", "login", "user"], fields=("input",))
@@ -170,15 +174,21 @@ class WebsiteUserbot:
         self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
         self._wait_for_captcha_clear()
+        print(f"Current URL after login attempt: {self.page.url}")
+        print(f"Page title after login attempt: {self.page.title()}")
         if not self._is_logged_in():
             print("Warning: login may not have completed. The site may require additional interaction.")
+            print(f"Login check failed. Current URL: {self.page.url}")
+            print(f"Current page title: {self.page.title()}")
 
     def _is_logged_in(self) -> bool:
         try:
             self.page.wait_for_selector('input[type="password"]', state='detached', timeout=8000)
         except TimeoutError:
             pass
-        return bool(self._find_chat_input())
+        logged_in = bool(self._find_chat_input())
+        print(f"Login check: chat input {'found' if logged_in else 'not found'}.")
+        return logged_in
 
     def _find_login_field(self, hints: List[str], fields: tuple) -> Optional[Page]:
         for field in fields:
@@ -328,6 +338,7 @@ class WebsiteUserbot:
         if self.page.query_selector('div[contenteditable="true"]'):
             print("Detected contenteditable chat input")
             return 'div[contenteditable="true"]'
+        print("No chat input selector matched.")
         return None
 
     def _find_chat_area(self) -> Optional[str]:
