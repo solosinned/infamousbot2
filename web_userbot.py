@@ -43,6 +43,26 @@ LOGIN_FAILURE_TEXT = [
     'forgot password',
 ]
 
+INITIAL_OVERLAY_TEXT_CANDIDATES = [
+    'click anywhere',
+    'loading learning environment',
+    'student dashboard',
+    'continue to site',
+]
+
+CHAT_OPEN_TRIGGER_SELECTORS = [
+    "button:has-text('Chat')",
+    "a:has-text('Chat')",
+    "button[aria-label*='chat']",
+    "button[class*='chat']",
+    "div[class*='chat']",
+    "[data-testid*='chat']",
+    "[aria-label*='Chat']",
+    ".bottom-nav .chat",
+    ".nav-chat",
+    ".chat-icon",
+]
+
 CAPTCHA_SELECTORS = [
     "iframe[src*='anubis']",
     "iframe[src*='captcha']",
@@ -278,6 +298,10 @@ class WebsiteUserbot:
         print(f"Page opened, current URL: {self.page.url}")
 
     def _open_login_dialog(self) -> None:
+        if self._open_chat_panel_if_needed():
+            print("Chat panel opened using bottom navigation trigger.")
+            return
+
         for text in LOGIN_BUTTON_TEXT:
             start_button = self.page.query_selector(f"button:has-text(\"{text}\")")
             if start_button and start_button.is_visible():
@@ -297,7 +321,41 @@ class WebsiteUserbot:
                     return
                 except Exception:
                     pass
+
+        page_text = self._get_body_text()
+        if any(token in page_text for token in INITIAL_OVERLAY_TEXT_CANDIDATES):
+            try:
+                print("Clicking page body to dismiss initial overlay and reveal login flow.")
+                self.page.click('body', timeout=5000)
+                time.sleep(0.5)
+            except Exception:
+                pass
+
         print("No login trigger button/link found; assuming login fields are already visible.")
+
+    def _open_chat_panel_if_needed(self) -> bool:
+        for selector in CHAT_OPEN_TRIGGER_SELECTORS:
+            try:
+                element = self.page.query_selector(selector)
+            except Exception:
+                continue
+            if element and element.is_visible():
+                try:
+                    print(f"Hovering and clicking chat trigger selector: {selector}")
+                    element.hover()
+                    time.sleep(0.2)
+                    element.click()
+                    time.sleep(0.5)
+                    return True
+                except Exception:
+                    try:
+                        print(f"Fallback clicking chat trigger selector: {selector}")
+                        element.click(force=True)
+                        time.sleep(0.5)
+                        return True
+                    except Exception:
+                        continue
+        return False
 
     def _detect_captcha(self) -> bool:
         for selector in CAPTCHA_SELECTORS:
@@ -351,6 +409,7 @@ class WebsiteUserbot:
             print(f"Failed to dump input fields: {exc}")
 
     def _dismiss_initial_overlay(self) -> None:
+        clicked = False
         for selector in OVERLAY_DISMISS_SELECTORS:
             try:
                 elements = self.page.query_selector_all(selector)
@@ -361,8 +420,24 @@ class WebsiteUserbot:
                     if element.is_visible():
                         element.click()
                         time.sleep(0.25)
+                        clicked = True
                 except Exception:
                     pass
+
+        if not clicked:
+            page_text = self._get_body_text()
+            if any(token in page_text for token in INITIAL_OVERLAY_TEXT_CANDIDATES):
+                try:
+                    print("Detected click-to-continue overlay; clicking body to dismiss it.")
+                    self.page.click('body', timeout=5000)
+                    time.sleep(0.5)
+                except Exception:
+                    try:
+                        self.page.mouse.click(10, 10)
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+
         try:
             self.page.evaluate(
                 "() => { const overlays = document.querySelectorAll('[class*=overlay],[class*=modal],[class*=popup],[class*=cookie],[class*=splash]'); overlays.forEach(el => el.style.display = 'none'); }"
