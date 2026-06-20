@@ -729,9 +729,70 @@ class WebsiteUserbot:
             if element and element.is_visible():
                 print(f"Detected chat input selector: {selector}")
                 return selector
-        if self.page.query_selector('div[contenteditable="true"]'):
-            print("Detected contenteditable chat input")
-            return 'div[contenteditable="true"]'
+
+        if self._open_chat_panel_if_needed():
+            print("Chat panel opened while searching for input. Retrying selectors.")
+            time.sleep(1)
+            for selector in CHAT_INPUT_CANDIDATES:
+                element = self.page.query_selector(selector)
+                if element and element.is_visible():
+                    print(f"Detected chat input selector after opening panel: {selector}")
+                    return selector
+
+        fallback_selectors = [
+            '[role="textbox"]',
+            '[role="searchbox"]',
+            '[data-testid*="chat"]',
+            '.chat-input',
+            '.message-input',
+            '.input',
+            '.inputfield',
+            '.editor',
+            '.ql-editor',
+            '.ProseMirror',
+            '[contenteditable="plaintext-only"]',
+        ]
+        for selector in fallback_selectors:
+            element = self.page.query_selector(selector)
+            if element and element.is_visible():
+                print(f"Detected fallback chat input selector: {selector}")
+                return selector
+
+        candidates = self.page.query_selector_all(
+            'input[type="text"], input:not([type]), textarea, [contenteditable="true"], [contenteditable="plaintext-only"]'
+        )
+        best_candidate: Optional[str] = None
+        candidate_count = 0
+        for element in candidates:
+            try:
+                if not element.is_visible():
+                    continue
+                attrs = {
+                    'placeholder': (element.get_attribute('placeholder') or '').lower(),
+                    'name': (element.get_attribute('name') or '').lower(),
+                    'id': (element.get_attribute('id') or '').lower(),
+                    'aria': (element.get_attribute('aria-label') or '').lower(),
+                    'class': (element.get_attribute('class') or '').lower(),
+                    'role': (element.get_attribute('role') or '').lower(),
+                    'contenteditable': (element.get_attribute('contenteditable') or '').lower(),
+                }
+                combined = ' '.join(attrs.values())
+                if any(keyword in combined for keyword in ['chat', 'message', 'send', 'type a message', 'enter a message', 'reply']):
+                    selector = self.page.evaluate("el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
+                    print(f"Detected candidate chat input by heuristics: {selector} -> {attrs}")
+                    return selector
+                if attrs['contenteditable'] in ['true', 'plaintext-only'] and not best_candidate:
+                    best_candidate = self.page.evaluate("el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
+                if not best_candidate:
+                    candidate_count += 1
+                    best_candidate = self.page.evaluate("el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
+            except Exception:
+                continue
+
+        if best_candidate and candidate_count > 0:
+            print(f"Falling back to first visible text input candidate: {best_candidate}")
+            return best_candidate
+
         print("No chat input selector matched.")
         return None
 
