@@ -17,13 +17,20 @@ CHAT_INPUT_CANDIDATES = [
     'textarea[placeholder*="message"]',
     'textarea[name*="chat"]',
     'textarea[name*="message"]',
+    'textarea[aria-label*="chat"]',
+    'textarea[aria-label*="message"]',
+    'textarea[id*="chat"]',
+    'textarea[id*="message"]',
     'input[placeholder*="chat"]',
     'input[placeholder*="message"]',
     'input[name*="chat"]',
     'input[name*="message"]',
+    'input[aria-label*="chat"]',
+    'input[aria-label*="message"]',
+    'input[id*="chat"]',
+    'input[id*="message"]',
     'div[contenteditable="true"]',
-    'div[class*="chat"]',
-    'div[class*="message"]',
+    '[contenteditable="true"]',
 ]
 
 LOGIN_SUCCESS_TEXT = [
@@ -719,7 +726,7 @@ class WebsiteUserbot:
     def _find_chat_input(self) -> Optional[str]:
         for selector in CHAT_INPUT_CANDIDATES:
             element = self.page.query_selector(selector)
-            if element:
+            if element and element.is_visible():
                 print(f"Detected chat input selector: {selector}")
                 return selector
         if self.page.query_selector('div[contenteditable="true"]'):
