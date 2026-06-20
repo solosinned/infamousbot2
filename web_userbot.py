@@ -63,6 +63,11 @@ CHAT_OPEN_TRIGGER_SELECTORS = [
     ".chat-icon",
 ]
 
+BROWSER_ERROR_URL_PREFIXES = [
+    'chrome-error://',
+    'data:text/html,chromewebdata',
+]
+
 CAPTCHA_SELECTORS = [
     "iframe[src*='anubis']",
     "iframe[src*='captcha']",
@@ -296,6 +301,16 @@ class WebsiteUserbot:
         except TimeoutError:
             print("Warning: page did not reach networkidle. Continuing with current page state.")
         print(f"Page opened, current URL: {self.page.url}")
+        self._check_for_browser_navigation_error()
+
+    def _check_for_browser_navigation_error(self) -> None:
+        if any(self.page.url.startswith(prefix) for prefix in BROWSER_ERROR_URL_PREFIXES):
+            body_text = self._get_body_text()
+            raise RuntimeError(
+                f"Browser navigation failed; current page URL is {self.page.url}. "
+                "Verify the target site is accessible from this environment. "
+                f"Page body preview: {body_text[:200]!r}"
+            )
 
     def _open_login_dialog(self) -> None:
         if self._open_chat_panel_if_needed():
