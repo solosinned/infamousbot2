@@ -5,6 +5,7 @@ import os
 import re
 import time
 from typing import List, Optional
+import random
 
 from bot import EconomyBot
 from config import HOTEL_URL, SITE_EMAIL, SITE_PASSWORD
@@ -90,6 +91,8 @@ CAPTCHA_SELECTORS = [
 ]
 
 CAPTCHA_WAIT_SECONDS = 180
+CAPTCHA_WAIT_SECONDS_ENV = "WEB_USERBOT_CAPTCHA_WAIT"
+EVADE_RETRY_COUNT = 3
 
 CHAT_AREA_CANDIDATES = [
     '.chat-log',
@@ -161,6 +164,9 @@ class WebsiteUserbot:
         self.chat_input_selector: Optional[str] = None
         self.chat_area_selector: Optional[str] = None
         self.username = self.local_user
+        self.browser = None
+        self.context = None
+        self._context_kwargs = None
 
     def _derive_local_user(self) -> str:
         if "@" in SITE_EMAIL:
@@ -185,7 +191,9 @@ class WebsiteUserbot:
             browser_kwargs["proxy"] = {"server": proxy_server}
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(**browser_kwargs)
-            context = browser.new_context(
+            # store browser/context so we can recreate contexts if needed
+            self.browser = browser
+            self._context_kwargs = dict(
                 ignore_https_errors=True,
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -197,6 +205,8 @@ class WebsiteUserbot:
                 viewport={"width": 1280, "height": 800},
                 java_script_enabled=True,
             )
+            context = browser.new_context(**self._context_kwargs)
+            self.context = context
             context.add_init_script(
                 "() => {"
                 "Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true });"
@@ -220,8 +230,16 @@ class WebsiteUserbot:
             try:
                 self.run()
             finally:
-                context.close()
-                browser.close()
+                try:
+                    if self.context:
+                        self.context.close()
+                except Exception:
+                    pass
+                try:
+                    if self.browser:
+                        self.browser.close()
+                except Exception:
+                    pass
 
     def _get_proxy_server(self, cli_proxy: Optional[str]) -> Optional[str]:
         proxy = (
@@ -655,7 +673,14 @@ class WebsiteUserbot:
 
     def _wait_for_anubis_challenge_clear(self) -> None:
         print("Anubis challenge detected. Waiting for the challenge to complete...")
-        deadline = time.time() + CAPTCHA_WAIT_SECONDS
+        wait_seconds = CAPTCHA_WAIT_SECONDS
+        try:
+            env_val = int(os.environ.get(CAPTCHA_WAIT_SECONDS_ENV, "0") or 0)
+            if env_val > 0:
+                wait_seconds = env_val
+        except Exception:
+            pass
+        deadline = time.time() + wait_seconds
         while time.time() < deadline:
             time.sleep(5)
             if not self._is_anubis_challenge():
@@ -666,14 +691,78 @@ class WebsiteUserbot:
                     print("Warning: networkidle timeout after Anubis clearance; continuing anyway.")
                 return
             print("Still waiting for Anubis challenge to clear...")
-        print(
-            "Warning: Anubis challenge did not clear within the wait period. "
-            "The bot may be blocked and cannot continue."
-        )
+
+        print("Warning: Anubis challenge did not clear within the wait period.")
+        # Save a debug snapshot before attempting evasion
+        self._save_debug_snapshot('anubis-timeout')
+
+        # Try a few evasive reloads by recreating the context with varied user agents
+        for attempt in range(1, EVADE_RETRY_COUNT + 1):
+            try:
+                print(f"Attempting evasion reload #{attempt}...")
+                if self._attempt_evasion_reload(attempt):
+                    print("Evasion reload succeeded; continuing.")
+                    return
+            except Exception as exc:
+                print(f"Evasion attempt #{attempt} failed: {exc}")
+            time.sleep(2 + attempt)
+
+        print("Evasion attempts failed. The bot may be blocked and cannot continue.")
         raise RuntimeError(
-            "Anubis anti-bot challenge remains active; aborting. "
+            "Anubis anti-bot challenge remains active after evasion attempts; aborting. "
             "Try running without --headless or with a proxy."
         )
+
+    def _attempt_evasion_reload(self, attempt: int) -> bool:
+        """Try to recreate the browser context with a rotated user agent and reload the site.
+
+        Returns True if the Anubis challenge is no longer detected after reload.
+        """
+        if not self.browser or not self._context_kwargs:
+            print("No browser/context available for evasion reload.")
+            return False
+        try:
+            # Close existing context if possible
+            try:
+                if self.context:
+                    self.context.close()
+            except Exception:
+                pass
+
+            # Rotate user agent slightly
+            ua_templates = [
+                self._context_kwargs.get('user_agent'),
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            ]
+            ua = random.choice(ua_templates)
+            new_kwargs = dict(self._context_kwargs)
+            new_kwargs['user_agent'] = ua
+
+            self.context = self.browser.new_context(**new_kwargs)
+            # re-apply the stealth init script if available
+            try:
+                self.context.add_init_script(
+                    "() => { Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true }); document.body.setAttribute('data-webdriver', 'false'); }"
+                )
+            except Exception:
+                pass
+            self.page = self.context.new_page()
+            try:
+                self.page.goto(HOTEL_URL, timeout=120000, wait_until='domcontentloaded')
+            except Exception:
+                pass
+            try:
+                self.page.wait_for_load_state('networkidle', timeout=60000)
+            except Exception:
+                pass
+            # Check if challenge still present
+            if not self._is_anubis_challenge() and not self._detect_captcha():
+                return True
+        except Exception as exc:
+            print(f"Evasion reload error: {exc}")
+        return False
 
     def _dump_input_fields(self) -> None:
         try:
