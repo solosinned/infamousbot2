@@ -110,6 +110,13 @@ CHAT_MESSAGE_CANDIDATES = [
     '.chat-item',
     '.msg',
     '.chat-msg',
+    '.message-content',
+    '.chat-text',
+    '.bubble-text',
+    '.comment',
+    '.comment-message',
+    '[data-testid*="message"]',
+    '[aria-label*="message"]',
 ]
 
 LOGIN_BUTTON_TEXT = [
@@ -232,7 +239,10 @@ class WebsiteUserbot:
         self._wait_for_captcha_clear()
         print(f"Initial URL before login: {self.page.url}")
         self._login_if_needed()
-        self.page.wait_for_load_state("networkidle", timeout=120000)
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=120000)
+        except TimeoutError:
+            print("Warning: page did not reach networkidle after login check; continuing anyway.")
         self._dismiss_initial_overlay()
         self._wait_for_captcha_clear()
         print(f"Page URL after login attempt: {self.page.url}")
@@ -295,7 +305,10 @@ class WebsiteUserbot:
         else:
             print("No login button found, pressing Enter on password field...")
             password_field.press("Enter")
-        self.page.wait_for_load_state("networkidle", timeout=120000)
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=120000)
+        except TimeoutError:
+            print("Warning: page did not reach networkidle after submitting login; continuing anyway.")
         self._dismiss_initial_overlay()
         self._wait_for_captcha_clear()
         print(f"Current URL after login attempt: {self.page.url}")
@@ -778,6 +791,17 @@ class WebsiteUserbot:
                 print(f"Error reading chat area text: {exc}")
         if not lines:
             lines = self._scan_message_elements()
+
+        if not lines or not any(COMMAND_PREFIX in line.lower() for line in lines):
+            scanned_lines = self._scan_message_elements()
+            if scanned_lines:
+                lines.extend(scanned_lines)
+
+        if not lines or not any(COMMAND_PREFIX in line.lower() for line in lines):
+            fallback_lines = self._scan_all_text_elements_with_commands()
+            if fallback_lines:
+                lines.extend(fallback_lines)
+
         if not lines:
             try:
                 raw_text = self.page.inner_text('body')
@@ -786,6 +810,14 @@ class WebsiteUserbot:
                 lines.extend(body_lines)
             except Exception as exc:
                 print(f"Fallback body scan failed: {exc}")
+        if lines:
+            unique_lines: List[str] = []
+            seen: set[str] = set()
+            for line in lines:
+                if line not in seen:
+                    unique_lines.append(line)
+                    seen.add(line)
+            lines = unique_lines
         if not lines:
             self._save_debug_snapshot('no-chat-lines')
         return lines
@@ -824,7 +856,37 @@ class WebsiteUserbot:
             if token.lower().startswith(COMMAND_PREFIX):
                 commands.append(" ".join(tokens[index:]).strip())
                 break
+        if not commands:
+            match = re.search(re.escape(COMMAND_PREFIX) + r"[\w@]+", content, flags=re.IGNORECASE)
+            if match:
+                commands.append(content[match.start():].strip())
         return commands
+
+    def _scan_all_text_elements_with_commands(self) -> List[str]:
+        try:
+            raw_texts = self.page.evaluate(
+                "() => {"
+                " const elements = Array.from(document.querySelectorAll('body *'));"
+                " const results = [];"
+                " for (const el of elements) {"
+                "   const style = window.getComputedStyle(el);"
+                "   if (!style || style.visibility === 'hidden' || style.display === 'none') continue;"
+                "   const text = el.innerText || '';"
+                "   if (text && text.toLowerCase().includes('s.')) {"
+                "     results.push(text.trim());"
+                "   }"
+                " }"
+                " return results;"
+                "}"
+            )
+            lines: List[str] = []
+            for text in raw_texts:
+                lines.extend([line.strip() for line in text.splitlines() if line.strip()])
+            print(f"Found {len(lines)} lines containing command prefix from page-wide scan.")
+            return lines
+        except Exception as exc:
+            print(f"Command-aware page scan failed: {exc}")
+            return []
 
     def _handle_command(self, command_text: str) -> Optional[str]:
         print(f"Handling command: {command_text}")
