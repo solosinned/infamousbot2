@@ -632,7 +632,11 @@ class WebsiteUserbot:
             print("Still waiting for CAPTCHA to clear...")
         print(
             "Warning: CAPTCHA did not clear within the wait period. "
-            "Continuing anyway; if the bot is blocked, try running without --headless."
+            "The bot may be blocked and cannot continue."
+        )
+        raise RuntimeError(
+            "CAPTCHA challenge remains active; aborting. "
+            "Try running without --headless or with a proxy."
         )
 
     def _is_anubis_challenge(self) -> bool:
@@ -664,7 +668,11 @@ class WebsiteUserbot:
             print("Still waiting for Anubis challenge to clear...")
         print(
             "Warning: Anubis challenge did not clear within the wait period. "
-            "Continuing anyway; run without --headless or improve stealth settings if needed."
+            "The bot may be blocked and cannot continue."
+        )
+        raise RuntimeError(
+            "Anubis anti-bot challenge remains active; aborting. "
+            "Try running without --headless or with a proxy."
         )
 
     def _dump_input_fields(self) -> None:
@@ -778,14 +786,14 @@ class WebsiteUserbot:
                 }
                 combined = ' '.join(attrs.values())
                 if any(keyword in combined for keyword in ['chat', 'message', 'send', 'type a message', 'enter a message', 'reply']):
-                    selector = self.page.evaluate("el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
+                    selector = self.page.evaluate(r"el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
                     print(f"Detected candidate chat input by heuristics: {selector} -> {attrs}")
                     return selector
                 if attrs['contenteditable'] in ['true', 'plaintext-only'] and not best_candidate:
-                    best_candidate = self.page.evaluate("el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
+                    best_candidate = self.page.evaluate(r"el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
                 if not best_candidate:
                     candidate_count += 1
-                    best_candidate = self.page.evaluate("el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
+                    best_candidate = self.page.evaluate(r"el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + el.className.replace(/\s+/g, '.') : '')", element)
             except Exception:
                 continue
 
