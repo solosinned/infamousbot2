@@ -623,9 +623,9 @@ class WebsiteUserbot:
                 print("CAPTCHA appears to be cleared.")
                 return
             print("Still waiting for CAPTCHA to clear...")
-        raise RuntimeError(
-            "CAPTCHA was detected and did not clear within the wait period. "
-            "Run the bot without --headless if you need to solve it manually, or adjust the site flow."
+        print(
+            "Warning: CAPTCHA did not clear within the wait period. "
+            "Continuing anyway; if the bot is blocked, try running without --headless."
         )
 
     def _is_anubis_challenge(self) -> bool:
@@ -649,12 +649,15 @@ class WebsiteUserbot:
             time.sleep(5)
             if not self._is_anubis_challenge():
                 print("Anubis challenge appears to be cleared.")
-                self.page.wait_for_load_state("networkidle", timeout=120000)
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=120000)
+                except TimeoutError:
+                    print("Warning: networkidle timeout after Anubis clearance; continuing anyway.")
                 return
             print("Still waiting for Anubis challenge to clear...")
-        raise RuntimeError(
-            "Anubis challenge did not clear within the wait period. "
-            "Run the bot without --headless or add more browsing stealth options."
+        print(
+            "Warning: Anubis challenge did not clear within the wait period. "
+            "Continuing anyway; run without --headless or improve stealth settings if needed."
         )
 
     def _dump_input_fields(self) -> None:
