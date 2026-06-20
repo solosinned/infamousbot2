@@ -13,7 +13,7 @@ import os
 # Set these in your environment instead of committing into this file:
 #   HOTEL_URL, SITE_EMAIL, SITE_PASSWORD
 
-HOTEL_URL = os.environ.get("HOTEL_URL", "https://inf44121.eleganthotel.my/")
+HOTEL_URL = os.environ.get("HOTEL_URL", "http://inf44121.eleganthotel.my/")
 SITE_EMAIL = os.environ.get("SITE_EMAIL", "tokyosidz@outlook.com")
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "87784325")
 

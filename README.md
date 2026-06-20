@@ -40,6 +40,12 @@ export SITE_PASSWORD="yourpassword"
 python3 web_userbot.py --headless
 ```
 
+- If your network needs a proxy, provide one with `--proxy` or set `WEB_USERBOT_PROXY`:
+
+```bash
+python3 web_userbot.py --headless --proxy http://127.0.0.1:8080
+```
+
 - The userbot will sign in with the provided credentials and monitor the page chat for commands prefixed with `s.`. Responses are sent back into the website chat.
 
 ## Notes

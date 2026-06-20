@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import time
 from typing import List, Optional
@@ -152,10 +153,53 @@ class WebsiteUserbot:
             return SITE_EMAIL.split("@", 1)[0]
         return SITE_EMAIL
 
-    def launch(self, headless: bool = False) -> None:
+    def launch(self, headless: bool = False, proxy: Optional[str] = None) -> None:
+        proxy_server = self._get_proxy_server(proxy)
+        browser_kwargs = {
+            "headless": headless,
+            "args": [
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--use-gl=desktop",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
+        }
+        if proxy_server:
+            print(f"Launching browser with proxy: {proxy_server}")
+            browser_kwargs["proxy"] = {"server": proxy_server}
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=headless)
-            context = browser.new_context(ignore_https_errors=True)
+            browser = playwright.chromium.launch(**browser_kwargs)
+            context = browser.new_context(
+                ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+                timezone_id="America/Los_Angeles",
+                viewport={"width": 1280, "height": 800},
+                java_script_enabled=True,
+            )
+            context.add_init_script(
+                "() => {"
+                "Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true });"
+                "Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });"
+                "Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });"
+                "Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });"
+                "window.chrome = { runtime: {} };"
+                "const originalQuery = window.navigator.permissions.query.bind(window.navigator.permissions);"
+                "window.navigator.permissions.query = (parameters) => {"
+                "  if (parameters.name === 'notifications') {"
+                "    return Promise.resolve({ state: Notification.permission });"
+                "  }"
+                "  return originalQuery(parameters);"
+                "};"
+                "document.body.setAttribute('data-webdriver', 'false');"
+                "}"
+            )
             page = context.new_page()
             page.set_default_timeout(120000)
             self.page = page
@@ -164,6 +208,22 @@ class WebsiteUserbot:
             finally:
                 context.close()
                 browser.close()
+
+    def _get_proxy_server(self, cli_proxy: Optional[str]) -> Optional[str]:
+        proxy = (
+            cli_proxy
+            or os.environ.get("WEB_USERBOT_PROXY")
+            or os.environ.get("HTTPS_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("http_proxy")
+        )
+        if not proxy:
+            return None
+        proxy = proxy.strip()
+        if proxy and not proxy.startswith(("http://", "https://", "socks5://")):
+            proxy = "http://" + proxy
+        return proxy
 
     def run(self) -> None:
         print(f"Starting website userbot for {self.local_user}...")
@@ -199,12 +259,32 @@ class WebsiteUserbot:
         print(f"Current URL before login: {self.page.url}")
         self._open_login_dialog()
         self._wait_for_captcha_clear()
+        
+        # Wait for form elements to appear
+        print("Waiting for login form elements to appear...")
+        try:
+            self.page.wait_for_selector("input, textarea, [contenteditable], form", timeout=10000)
+        except TimeoutError:
+            print("Warning: Timeout waiting for form elements")
+        
+        time.sleep(1)
+        
         email_field = self._find_login_field(["email", "login", "user"], fields=("input",))
         password_field = self._find_login_field(["password", "pass"], fields=("input",))
+        
         if not email_field or not password_field:
             print("Login fields were not found. Dumping candidate inputs...")
             self._dump_input_fields()
+            # Try to get more page info
+            print("Current page URL:", self.page.url)
+            print("Current page title:", self.page.title())
+            try:
+                form_elements = self.page.query_selector_all("form")
+                print(f"Found {len(form_elements)} form elements on page")
+            except Exception:
+                pass
             raise RuntimeError("Unable to find login form fields. Please verify the website login page structure.")
+        
         print("Filling login credentials...")
         email_field.fill(SITE_EMAIL)
         password_field.fill(SITE_PASSWORD)
@@ -213,6 +293,7 @@ class WebsiteUserbot:
             print("Clicking login button...")
             button.click()
         else:
+            print("No login button found, pressing Enter on password field...")
             password_field.press("Enter")
         self.page.wait_for_load_state("networkidle", timeout=120000)
         self._dismiss_initial_overlay()
@@ -257,6 +338,7 @@ class WebsiteUserbot:
             return ''
 
     def _find_login_field(self, hints: List[str], fields: tuple) -> Optional[Page]:
+        # First, try to find in any visible login form
         for field in fields:
             for hint in hints:
                 selectors = [
@@ -264,30 +346,112 @@ class WebsiteUserbot:
                     f'{field}[name*="{hint}"]',
                     f'{field}[id*="{hint}"]',
                     f'{field}[placeholder*="{hint}"]',
+                    f'{field}[aria-label*="{hint}"]',
                 ]
                 for selector in selectors:
-                    element = self.page.query_selector(selector)
-                    if element:
-                        return element
+                    try:
+                        element = self.page.query_selector(selector)
+                        if element and element.is_visible():
+                            return element
+                    except Exception:
+                        pass
+        
+        # Try finding by attribute combinations
         for field in fields:
-            element = self.page.query_selector(f"{field}[type='text']")
-            if element:
-                placeholder = (element.get_attribute("placeholder") or "").lower()
-                if any(hint in placeholder for hint in hints):
-                    return element
+            try:
+                element = self.page.query_selector(f"{field}[type='text']")
+                if element and element.is_visible():
+                    placeholder = (element.get_attribute("placeholder") or "").lower()
+                    if any(hint in placeholder for hint in hints):
+                        return element
+            except Exception:
+                pass
+        
+        # Try broader patterns
+        for hint in hints:
+            try:
+                # Look for label associated with input
+                label = self.page.query_selector(f"label:has-text('{hint}')")
+                if label:
+                    for_attr = label.get_attribute("for")
+                    if for_attr:
+                        element = self.page.query_selector(f'#{for_attr}')
+                        if element and element.is_visible():
+                            return element
+            except Exception:
+                pass
+        
+        # Try to find any form element that might work
+        try:
+            all_inputs = self.page.query_selector_all("input[type='text'], input[type='email'], input[type='password'], input:not([type])")
+            for element in all_inputs:
+                try:
+                    if not element.is_visible():
+                        continue
+                    name = (element.get_attribute("name") or "").lower()
+                    element_id = (element.get_attribute("id") or "").lower()
+                    placeholder = (element.get_attribute("placeholder") or "").lower()
+                    aria_label = (element.get_attribute("aria-label") or "").lower()
+                    
+                    combined = f"{name} {element_id} {placeholder} {aria_label}"
+                    if any(hint in combined for hint in hints):
+                        return element
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
         return None
 
     def _find_login_button(self) -> Optional[Page]:
         for text in LOGIN_BUTTON_TEXT:
-            button = self.page.query_selector(f"button:has-text(\"{text}\")")
-            if button:
+            try:
+                button = self.page.query_selector(f"button:has-text(\"{text}\")")
+                if button and button.is_visible():
+                    return button
+            except Exception:
+                pass
+            try:
+                button = self.page.query_selector(f"input[type='submit'][value*='{text}']")
+                if button and button.is_visible():
+                    return button
+            except Exception:
+                pass
+        
+        # Try buttons with class patterns
+        try:
+            button = self.page.query_selector("button[class*='submit'], button[class*='login'], button[class*='signin']")
+            if button and button.is_visible():
                 return button
-            button = self.page.query_selector(f"input[type='submit'][value*='{text}']")
-            if button:
-                return button
-        buttons = self.page.query_selector_all("button, input[type='submit']")
-        if buttons:
-            return buttons[0]
+        except Exception:
+            pass
+        
+        # Try any visible submit button
+        try:
+            buttons = self.page.query_selector_all("button[type='submit'], input[type='submit']")
+            if buttons:
+                for button in buttons:
+                    try:
+                        if button.is_visible():
+                            return button
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        # Fallback: get first visible button
+        try:
+            buttons = self.page.query_selector_all("button, input[type='submit']")
+            if buttons:
+                for button in buttons:
+                    try:
+                        if button.is_visible():
+                            return button
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
         return None
 
     def _open_site(self) -> None:
@@ -301,7 +465,24 @@ class WebsiteUserbot:
         except TimeoutError:
             print("Warning: page did not reach networkidle. Continuing with current page state.")
         print(f"Page opened, current URL: {self.page.url}")
-        self._check_for_browser_navigation_error()
+        try:
+            self._check_for_browser_navigation_error()
+        except RuntimeError as exc:
+            if HOTEL_URL.lower().startswith("https://"):
+                fallback_url = "http://" + HOTEL_URL[len("https://"):]
+                print(f"Detected browser navigation failure; retrying with fallback URL: {fallback_url}")
+                try:
+                    self.page.goto(fallback_url, timeout=120000, wait_until='domcontentloaded')
+                    try:
+                        self.page.wait_for_load_state("networkidle", timeout=120000)
+                    except TimeoutError:
+                        print("Warning: fallback page did not reach networkidle. Continuing with current page state.")
+                    self._check_for_browser_navigation_error()
+                    print(f"Page opened successfully with fallback URL: {self.page.url}")
+                    return
+                except Exception as fallback_exc:
+                    print(f"HTTP fallback also failed: {fallback_exc}")
+            raise
 
     def _check_for_browser_navigation_error(self) -> None:
         if any(self.page.url.startswith(prefix) for prefix in BROWSER_ERROR_URL_PREFIXES):
@@ -337,6 +518,31 @@ class WebsiteUserbot:
                 except Exception:
                     pass
 
+        # Try additional selectors for login buttons
+        additional_selectors = [
+            'button[class*="login"]',
+            'button[class*="signin"]',
+            'button[class*="auth"]',
+            'a[class*="login"]',
+            'a[class*="signin"]',
+            'a[href*="login"]',
+            'a[href*="signin"]',
+            'input[type="submit"]',
+        ]
+        for selector in additional_selectors:
+            try:
+                button = self.page.query_selector(selector)
+                if button and button.is_visible():
+                    try:
+                        print(f"Clicking login trigger with selector: {selector}")
+                        button.click()
+                        time.sleep(0.5)
+                        return
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         page_text = self._get_body_text()
         if any(token in page_text for token in INITIAL_OVERLAY_TEXT_CANDIDATES):
             try:
@@ -347,6 +553,7 @@ class WebsiteUserbot:
                 pass
 
         print("No login trigger button/link found; assuming login fields are already visible.")
+        time.sleep(1)
 
     def _open_chat_panel_if_needed(self) -> bool:
         for selector in CHAT_OPEN_TRIGGER_SELECTORS:
@@ -393,6 +600,8 @@ class WebsiteUserbot:
     def _wait_for_captcha_clear(self) -> None:
         if not self._detect_captcha():
             return
+        if self._is_anubis_challenge():
+            return self._wait_for_anubis_challenge_clear()
         print("CAPTCHA detected. Waiting for manual solve or page clearance...")
         deadline = time.time() + CAPTCHA_WAIT_SECONDS
         while time.time() < deadline:
@@ -406,10 +615,39 @@ class WebsiteUserbot:
             "Run the bot without --headless if you need to solve it manually, or adjust the site flow."
         )
 
+    def _is_anubis_challenge(self) -> bool:
+        try:
+            body_text = self.page.inner_text('body').lower()
+            if "making sure you're not a bot" in body_text:
+                return True
+        except Exception:
+            pass
+        try:
+            if self.page.query_selector("script#anubis_version"):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _wait_for_anubis_challenge_clear(self) -> None:
+        print("Anubis challenge detected. Waiting for the challenge to complete...")
+        deadline = time.time() + CAPTCHA_WAIT_SECONDS
+        while time.time() < deadline:
+            time.sleep(5)
+            if not self._is_anubis_challenge():
+                print("Anubis challenge appears to be cleared.")
+                self.page.wait_for_load_state("networkidle", timeout=120000)
+                return
+            print("Still waiting for Anubis challenge to clear...")
+        raise RuntimeError(
+            "Anubis challenge did not clear within the wait period. "
+            "Run the bot without --headless or add more browsing stealth options."
+        )
+
     def _dump_input_fields(self) -> None:
         try:
-            elements = self.page.query_selector_all('input, textarea, [contenteditable]')
-            print("Dumping candidate input fields:")
+            elements = self.page.query_selector_all('input, textarea, [contenteditable], form')
+            print(f"Dumping {len(elements)} candidate input fields:")
             for element in elements:
                 try:
                     tag = element.evaluate("el => el.tagName")
@@ -417,9 +655,11 @@ class WebsiteUserbot:
                     name = element.get_attribute("name") or ""
                     element_id = element.get_attribute("id") or ""
                     placeholder = element.get_attribute("placeholder") or ""
-                    print(f"  {tag} type={input_type!r} name={name!r} id={element_id!r} placeholder={placeholder!r}")
-                except Exception:
-                    pass
+                    aria_label = element.get_attribute("aria-label") or ""
+                    visible = element.is_visible()
+                    print(f"  {tag} type={input_type!r} name={name!r} id={element_id!r} placeholder={placeholder!r} aria-label={aria_label!r} visible={visible}")
+                except Exception as e:
+                    print(f"  Error inspecting element: {e}")
         except Exception as exc:
             print(f"Failed to dump input fields: {exc}")
 
@@ -666,10 +906,14 @@ class WebsiteUserbot:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the InfamousBot2 website userbot.")
     parser.add_argument("--headless", action="store_true", help="Run the browser in headless mode.")
+    parser.add_argument(
+        "--proxy",
+        help="Optional proxy server to use for the browser, e.g. http://host:port.",
+    )
     args = parser.parse_args()
 
     bot = WebsiteUserbot()
     try:
-        bot.launch(headless=args.headless)
+        bot.launch(headless=args.headless, proxy=args.proxy)
     except Exception as error:
         print(f"Website userbot could not run: {error}")
